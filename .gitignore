@@ -1,7 +1,9 @@
 *.o
+*.gb
+*.isx
 isx2gb
 isx2gb.exe
-isx2gb2.ppj
-isx2gb2.ppx
-isx2gb2.tag
+isx2gb.ppj
+isx2gb.ppx
+isx2gb.tag
 /output
