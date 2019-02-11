@@ -77,18 +77,21 @@ func parseISXData(data []byte, size int) int {
 	})
 
 	// present results
-	bank := byte(0)
-	init := bool(true)
+	bank := isxMap[0].bank
+	fmt.Printf("\nBank $%02x:\n", bank)
+	total := uint16(0)
 	overflow := bool(false)
 
 	for _, v := range isxMap {
-		if v.bank > bank || init {
+		if v.bank > bank {
 			bank = v.bank
-			init = false
+			fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
+			total = 0
 			fmt.Printf("\nBank $%02x:\n", bank)
 		}
 
-		fmt.Printf("\t\t$%04x - $%04x   (%4d bytes)", v.offset, v.offset+v.lenght, v.lenght)
+		fmt.Printf("\t\t$%04X - $%04X    %4d", v.offset, v.offset+v.lenght, v.lenght)
+		total += v.lenght
 
 		if v.offset < 0x4000 && (v.offset+v.lenght) < 0x8000 {
 			fmt.Printf("\n")
@@ -99,7 +102,7 @@ func parseISXData(data []byte, size int) int {
 		} else if v.offset > 0xBFFF && v.offset < 0xE000 && (v.offset+v.lenght) < 0xE000 {
 			fmt.Printf("\n")
 		} else {
-			fmt.Printf(" - overflow!\n")
+			fmt.Printf(" (!)\n")
 			overflow = true
 		}
 
@@ -127,8 +130,10 @@ func parseISXData(data []byte, size int) int {
 		// }
 	}
 
+	fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
+
 	if overflow {
-		fmt.Fprintf(os.Stderr, "\nError: Data overflow detected\n")
+		fmt.Fprintf(os.Stderr, "\nError: (!) data overflow detected\n")
 		os.Exit(1)
 	}
 
