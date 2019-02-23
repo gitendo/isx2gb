@@ -21,33 +21,42 @@ const hiLength = 5
 
 const headerSize = 32
 
-type record struct {
-	bank   byte
-	offset uint16
-	lenght uint16
+type regions struct {
+	rom   []record
+	sram  []record
+	ram   []record
+	bogus []record
 }
 
-//const (
-//	errMissing = "file missing"
-//)
-func baka(isxMap []record) []record {
-	// sort isx records according to bank and offset
-	sort.Slice(isxMap, func(i, j int) bool {
-		if isxMap[i].bank < isxMap[j].bank {
+type record struct {
+	bank     byte
+	offset   uint16
+	lenght   uint16
+	overflow bool
+}
+
+// sort isx records (rom, ram, sram) according to bank and offset
+func sortRecords(region []record) []record {
+
+	sort.Slice(region, func(i, j int) bool {
+		if region[i].bank < region[j].bank {
 			return true
 		}
-		if isxMap[i].bank > isxMap[j].bank {
+		if region[i].bank > region[j].bank {
 			return false
 		}
-		return isxMap[i].offset < isxMap[j].offset
+		return region[i].offset < region[j].offset
 	})
-	return isxMap
+	return region
 }
 
 // scan isx records, create ROM map and count used banks
 func parseISXData(data []byte, size int) int {
 
-	isxMap := []record{}
+	rom := []record{}
+	ram := []record{}
+	sram := []record{}
+	bogus := []record{}
 	used := byte(0)
 	i := 0
 
@@ -61,8 +70,28 @@ func parseISXData(data []byte, size int) int {
 				if data[i+loBank] > used {
 					used = data[i+loBank]
 				}
-				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), lenght: binary.LittleEndian.Uint16(data[i+loLength:])}
-				isxMap = append(isxMap, entry)
+
+				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), lenght: binary.LittleEndian.Uint16(data[i+loLength:]), overflow: false}
+
+				if entry.offset >= 0x0000 && entry.offset < 0x8000 {
+					if (entry.offset + entry.lenght) >= 0x8000 {
+						entry.overflow = true
+					}
+					rom = append(rom, entry)
+				} else if entry.offset >= 0xA000 && entry.offset < 0xC000 {
+					if (entry.offset + entry.lenght) >= 0x2000 {
+						entry.overflow = true
+					}
+					sram = append(sram, entry)
+				} else if entry.offset >= 0xC000 && entry.offset < 0xE000 {
+					if (entry.offset + entry.lenght) >= 0x2000 {
+						entry.overflow = true
+					}
+					ram = append(ram, entry)
+				} else {
+					bogus = append(bogus, entry)
+				}
+
 				i += int(entry.lenght)
 				i += loHeader
 			}
@@ -73,20 +102,18 @@ func parseISXData(data []byte, size int) int {
 		// case 0x13:
 		// case 0x14:
 		default:
-			fmt.Fprintf(os.Stderr, "Error: Unknown record type (%x)", data[i:i+hiHeader])
+			fmt.Fprintf(os.Stderr, "Error: Unknown record type (%X : %X)", i, data[i])
 			os.Exit(1)
 		}
 	}
 
-	isxMap = baka(isxMap)
+	isxMap := regions{rom, sram, ram, bogus}
 
-	// present results
-	bank := isxMap[0].bank
-	fmt.Printf("\nBank $%02x:\n", bank)
-	total := uint16(0)
-	overflow := bool(false)
+	for k, v := range isxMap {
+		if len(v) > 0 {
 
-	for _, v := range isxMap {
+		}
+
 		if v.bank > bank {
 			bank = v.bank
 			fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
@@ -97,42 +124,15 @@ func parseISXData(data []byte, size int) int {
 		fmt.Printf("\t\t$%04X - $%04X    %4d", v.offset, v.offset+v.lenght, v.lenght)
 		total += v.lenght
 
-		if v.offset < 0x4000 && (v.offset+v.lenght) < 0x8000 {
-			fmt.Printf("\n")
-		} else if v.offset > 0x3FFF && v.offset < 0x8000 && (v.offset+v.lenght) < 0x8000 {
-			fmt.Printf("\n")
-		} else if v.offset > 0x9FFF && v.offset < 0xC000 && (v.offset+v.lenght) < 0xC000 {
-			fmt.Printf("\n")
-		} else if v.offset > 0xBFFF && v.offset < 0xE000 && (v.offset+v.lenght) < 0xE000 {
-			fmt.Printf("\n")
-		} else {
-			fmt.Printf(" (!)\n")
-			overflow = true
-		}
-
-		// // bank 0
-		// if v.offset < 0x4000 && (v.offset+v.lenght) > 0x7FFF {
-		// 	overflow = true
-		// }
-		// // banks 1-255
-		// if v.offset > 0x3FFF && v.offset < 0x8000 && (v.offset+v.lenght) > 0x7FFF {
-		// 	overflow = true
-		// }
-		// // sram
-		// if v.offset > 0x9FFF && v.offset < 0xC000 && (v.offset+v.lenght) > 0xBFFF {
-		// 	overflow = true
-		// }
-		// // ram
-		// if v.offset > 0xBFFF && v.offset < 0xE000 && (v.offset+v.lenght) > 0xDFFF {
-		// 	overflow = true
-		// }
-
-		// if overflow {
-		// 	fmt.Printf(" - overflow!\n")
-		// } else {
-		// 	fmt.Printf("\n")
-		// }
 	}
+
+	sortRecords(isxMap)
+
+	// present results
+	bank := isxMap[0].bank
+	fmt.Printf("\nBank $%02x:\n", bank)
+	total := uint16(0)
+	overflow := bool(false)
 
 	fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
 
