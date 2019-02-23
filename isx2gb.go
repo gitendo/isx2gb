@@ -30,6 +30,19 @@ type record struct {
 //const (
 //	errMissing = "file missing"
 //)
+func baka(isxMap []record) []record {
+	// sort isx records according to bank and offset
+	sort.Slice(isxMap, func(i, j int) bool {
+		if isxMap[i].bank < isxMap[j].bank {
+			return true
+		}
+		if isxMap[i].bank > isxMap[j].bank {
+			return false
+		}
+		return isxMap[i].offset < isxMap[j].offset
+	})
+	return isxMap
+}
 
 // scan isx records, create ROM map and count used banks
 func parseISXData(data []byte, size int) int {
@@ -50,7 +63,7 @@ func parseISXData(data []byte, size int) int {
 				}
 				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), lenght: binary.LittleEndian.Uint16(data[i+loLength:])}
 				isxMap = append(isxMap, entry)
-				i += int(binary.LittleEndian.Uint16(data[i+loLength:]))
+				i += int(entry.lenght)
 				i += loHeader
 			}
 
@@ -65,16 +78,7 @@ func parseISXData(data []byte, size int) int {
 		}
 	}
 
-	// sort isx records according to bank and offset
-	sort.Slice(isxMap, func(i, j int) bool {
-		if isxMap[i].bank < isxMap[j].bank {
-			return true
-		}
-		if isxMap[i].bank > isxMap[j].bank {
-			return false
-		}
-		return isxMap[i].offset < isxMap[j].offset
-	})
+	isxMap = baka(isxMap)
 
 	// present results
 	bank := isxMap[0].bank
