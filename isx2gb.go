@@ -9,18 +9,22 @@ import (
 	"strings"
 )
 
+// roms up to 128Mbit
 const loHeader = 6
 const loBank = 1
 const loOffset = 2
 const loLength = 4
 
+// roms over 128Mbit
 const hiHeader = 7
 const hiBank = 2
 const hiOffset = 3
 const hiLength = 5
 
+// isx string
 const headerSize = 32
 
+// used to present data layout
 type record struct {
 	bank     byte
 	offset   uint16
@@ -28,68 +32,85 @@ type record struct {
 	overflow bool
 }
 
-type records struct {
-	rom   *[]record
-	sram  *[]record
-	ram   *[]record
-	bogus *[]record
-}
-
-//
-func printSummary(area []record) {
+// present rom, sram, ram data layout, size summary and overflow check
+func areaSummary(area []record) {
 
 	if len(area) > 0 {
+		// sort by bank, offset and length
 		area = sortRecords(area)
 
 		bank := area[0].bank
-		fmt.Printf("\nBank $%02x:\n", bank)
-		total := uint16(0)
 		overflow := bool(false)
+		total := uint16(0)
+		prev := uint16(0)
+		next := uint16(0)
 
-		for _, v := range area {
-			if v.bank > bank {
-				bank = v.bank
+		fmt.Printf("\nBank $%02x:\n", bank)
+
+		for _, r := range area {
+
+			if r.bank > bank {
 				fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
 				total = 0
+				bank = r.bank
 				fmt.Printf("\nBank $%02x:\n", bank)
 			}
 
-			fmt.Printf("\t\t$%04X - $%04X    %4d", v.offset, v.offset+v.lenght, v.lenght)
-			if v.overflow {
+			next = r.offset + r.lenght
+			fmt.Printf("\t\t$%04X - $%04X    %4d", r.offset, next-1, r.lenght)
+
+			if r.overflow {
+				overflow = true
 				fmt.Println(" - overflow!")
 			} else {
 				fmt.Println("")
 			}
-			//	total += v.lenght
-
+			// gets buggy w/out sorting
+			if prev < r.offset {
+				total += r.lenght
+			} else {
+				// exclude overlapped bytes
+				total += (next - prev)
+			}
+			prev = next
 		}
 
 		fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
 
 		if overflow {
-			fmt.Fprintf(os.Stderr, "\nError: (!) data overflow detected\n")
+			fmt.Fprintf(os.Stderr, "\nError: data overflow detected\n")
 			os.Exit(1)
 		}
 
 	}
 }
 
-// sort isx records (rom, ram, sram) according to bank and offset
+// sort areas (rom, ram, sram) according to bank and offset
 func sortRecords(area []record) []record {
 
 	sort.Slice(area, func(i, j int) bool {
-		if area[i].bank < area[j].bank {
-			return true
+		switch {
+
+		case area[i].bank != area[j].bank:
+			return area[i].bank < area[j].bank
+
+		default:
+			return area[i].offset < area[j].offset
 		}
-		if area[i].bank > area[j].bank {
-			return false
-		}
-		return area[i].offset < area[j].offset
+		/*
+			if area[i].bank < area[j].bank {
+				return true
+			}
+			if area[i].bank > area[j].bank {
+				return false
+			}
+			return area[i].offset < area[j].offset
+		*/
 	})
 	return area
 }
 
-// scan isx records, create ROM map and count used banks
+// scan isx records, create rom map and count used banks
 func parseISXData(data []byte, size int) int {
 
 	rom := []record{}
@@ -111,23 +132,25 @@ func parseISXData(data []byte, size int) int {
 				}
 
 				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), lenght: binary.LittleEndian.Uint16(data[i+loLength:]), overflow: false}
+				length := entry.offset + entry.lenght
 
-				if entry.offset >= 0x0000 && entry.offset < 0x8000 {
-					if (entry.offset + entry.lenght) >= 0x8000 {
+				switch {
+				case entry.offset >= 0x0000 && entry.offset < 0x8000:
+					if length >= 0x8000 {
 						entry.overflow = true
 					}
 					rom = append(rom, entry)
-				} else if entry.offset >= 0xA000 && entry.offset < 0xC000 {
-					if (entry.offset + entry.lenght) >= 0x2000 {
+				case entry.offset >= 0xA000 && entry.offset < 0xC000:
+					if length >= 0x2000 {
 						entry.overflow = true
 					}
 					sram = append(sram, entry)
-				} else if entry.offset >= 0xC000 && entry.offset < 0xE000 {
-					if (entry.offset + entry.lenght) >= 0x2000 {
+				case entry.offset >= 0xC000 && entry.offset < 0xE000:
+					if length >= 0x2000 {
 						entry.overflow = true
 					}
 					ram = append(ram, entry)
-				} else {
+				default:
 					bogus = append(bogus, entry)
 				}
 
@@ -146,15 +169,15 @@ func parseISXData(data []byte, size int) int {
 		}
 	}
 
-	printSummary(rom)
-	printSummary(sram)
-	printSummary(ram)
-	//, &sram, &ram, &bogus}
+	areaSummary(rom)
+	areaSummary(sram)
+	areaSummary(ram)
+	areaSummary(bogus)
 
 	return int(used)
 }
 
-// fill ROM image with code blocks
+// fill rom image with code blocks
 func copyISXBinary(data []byte, rom []byte, size int) {
 
 	var address, i, length int
