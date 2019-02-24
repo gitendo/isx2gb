@@ -21,13 +21,6 @@ const hiLength = 5
 
 const headerSize = 32
 
-type regions struct {
-	rom   []record
-	sram  []record
-	ram   []record
-	bogus []record
-}
-
 type record struct {
 	bank     byte
 	offset   uint16
@@ -35,19 +28,65 @@ type record struct {
 	overflow bool
 }
 
-// sort isx records (rom, ram, sram) according to bank and offset
-func sortRecords(region []record) []record {
+type records struct {
+	rom   *[]record
+	sram  *[]record
+	ram   *[]record
+	bogus *[]record
+}
 
-	sort.Slice(region, func(i, j int) bool {
-		if region[i].bank < region[j].bank {
+//
+func printSummary(area []record) {
+
+	if len(area) > 0 {
+		area = sortRecords(area)
+
+		bank := area[0].bank
+		fmt.Printf("\nBank $%02x:\n", bank)
+		total := uint16(0)
+		overflow := bool(false)
+
+		for _, v := range area {
+			if v.bank > bank {
+				bank = v.bank
+				fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
+				total = 0
+				fmt.Printf("\nBank $%02x:\n", bank)
+			}
+
+			fmt.Printf("\t\t$%04X - $%04X    %4d", v.offset, v.offset+v.lenght, v.lenght)
+			if v.overflow {
+				fmt.Println(" - overflow!")
+			} else {
+				fmt.Println("")
+			}
+			//	total += v.lenght
+
+		}
+
+		fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
+
+		if overflow {
+			fmt.Fprintf(os.Stderr, "\nError: (!) data overflow detected\n")
+			os.Exit(1)
+		}
+
+	}
+}
+
+// sort isx records (rom, ram, sram) according to bank and offset
+func sortRecords(area []record) []record {
+
+	sort.Slice(area, func(i, j int) bool {
+		if area[i].bank < area[j].bank {
 			return true
 		}
-		if region[i].bank > region[j].bank {
+		if area[i].bank > area[j].bank {
 			return false
 		}
-		return region[i].offset < region[j].offset
+		return area[i].offset < area[j].offset
 	})
-	return region
+	return area
 }
 
 // scan isx records, create ROM map and count used banks
@@ -107,39 +146,10 @@ func parseISXData(data []byte, size int) int {
 		}
 	}
 
-	isxMap := regions{rom, sram, ram, bogus}
-
-	for k, v := range isxMap {
-		if len(v) > 0 {
-
-		}
-
-		if v.bank > bank {
-			bank = v.bank
-			fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
-			total = 0
-			fmt.Printf("\nBank $%02x:\n", bank)
-		}
-
-		fmt.Printf("\t\t$%04X - $%04X    %4d", v.offset, v.offset+v.lenght, v.lenght)
-		total += v.lenght
-
-	}
-
-	sortRecords(isxMap)
-
-	// present results
-	bank := isxMap[0].bank
-	fmt.Printf("\nBank $%02x:\n", bank)
-	total := uint16(0)
-	overflow := bool(false)
-
-	fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
-
-	if overflow {
-		fmt.Fprintf(os.Stderr, "\nError: (!) data overflow detected\n")
-		os.Exit(1)
-	}
+	printSummary(rom)
+	printSummary(sram)
+	printSummary(ram)
+	//, &sram, &ram, &bogus}
 
 	return int(used)
 }
@@ -215,14 +225,15 @@ func main() {
 
 	banks := parseISXData(data[32:], fs-headerSize)
 	banks++
-	rom := make([]byte, banks*16384)
-	copyISXBinary(data[32:], rom[:], fs-headerSize)
+	/*
+		rom := make([]byte, banks*16384)
+		copyISXBinary(data[32:], rom[:], fs-headerSize)
 
-	// write ROM file
-	err = ioutil.WriteFile(fn, rom, 0644)
-	if err, ok := err.(*os.PathError); ok {
-		fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
-		os.Exit(1)
-	}
-
+		// write ROM file
+		err = ioutil.WriteFile(fn, rom, 0644)
+		if err, ok := err.(*os.PathError); ok {
+			fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
+			os.Exit(1)
+		}
+	*/
 }
