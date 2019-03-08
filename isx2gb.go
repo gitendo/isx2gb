@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"sort"
 	"strings"
 )
+
+const ver = 1.00
 
 // roms up to 128Mbit
 const loHeader = 6
@@ -36,7 +39,7 @@ type record struct {
 func areaSummary(area []record) {
 
 	if len(area) > 0 {
-		// sort by bank, offset and length
+		// sort by bank and offset
 		area = sortRecords(area)
 
 		bank := area[0].bank
@@ -47,30 +50,32 @@ func areaSummary(area []record) {
 
 		fmt.Printf("\nBank $%02x:\n", bank)
 
-		for _, r := range area {
+		for _, entry := range area {
 
-			if r.bank > bank {
+			if entry.bank > bank {
 				fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
 				total = 0
-				bank = r.bank
+				bank = entry.bank
 				fmt.Printf("\nBank $%02x:\n", bank)
 			}
 
-			next = r.offset + r.lenght
-			fmt.Printf("\t\t$%04X - $%04X    %4d", r.offset, next-1, r.lenght)
+			next = entry.offset + entry.lenght
+			fmt.Printf("\t\t$%04X - $%04X    %4d", entry.offset, next-1, entry.lenght)
 
-			if r.overflow {
+			if entry.overflow {
 				overflow = true
 				fmt.Println(" - overflow!")
 			} else {
 				fmt.Println("")
 			}
 			// gets buggy w/out sorting
-			if prev < r.offset {
-				total += r.lenght
+			if prev < entry.offset {
+				total += entry.lenght
 			} else {
 				// exclude overlapped bytes
-				total += (next - prev)
+				if next > prev {
+					total += (next - prev)
+				}
 			}
 			prev = next
 		}
@@ -154,8 +159,7 @@ func parseISXData(data []byte, size int) int {
 					bogus = append(bogus, entry)
 				}
 
-				i += int(entry.lenght)
-				i += loHeader
+				i = i + loHeader + int(entry.lenght)
 			}
 
 		// case 0x03:
@@ -205,6 +209,22 @@ func copyISXBinary(data []byte, rom []byte, size int) {
 }
 
 func main() {
+
+	fmt.Printf("\nisx2gb v%.2f - Intelligent Systems eXecutable converter for Game Boy (Color)\n", ver)
+	fmt.Println("Programmed by: tmk, email: tmk@tuta.io")
+	fmt.Printf("Project page: https://github.com/gitendo/isx2gb/\n\n")
+
+	flgSort := flag.Bool("s", false, "sort isx records by rom bank / offset")
+	flag.Parse()
+	//	flag.Usage = usage
+
+	// print usage if no input
+	if len(os.Args) == 1 {
+		flag.PrintDefaults()
+		//		os.Exit(1)
+	}
+
+	fmt.Println("flag:", *flgSort)
 
 	// access FileInfo - get file name and size
 	isx, err := os.Stat("lancelot.isx")
