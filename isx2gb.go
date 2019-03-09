@@ -28,15 +28,16 @@ const hiLength = 5
 const headerSize = 32
 
 // used to present data layout
+// status: -1 overflow, 0 normal, 1 spanned
 type record struct {
-	bank     byte
-	offset   uint16
-	lenght   uint16
-	overflow bool
+	bank   byte
+	offset uint16
+	length uint16
+	status byte
 }
 
 // present rom, sram, ram data layout, size summary and overflow check
-func areaSummary(area []record) {
+func areaDetails(area []record, name string) {
 
 	if len(area) > 0 {
 		// sort by bank and offset
@@ -47,8 +48,9 @@ func areaSummary(area []record) {
 		total := uint16(0)
 		prev := uint16(0)
 		next := uint16(0)
+		flg := bool(true)
 
-		fmt.Printf("\nBank $%02x:\n", bank)
+		fmt.Printf("%s Bank $%02x:\n", name, bank)
 
 		for _, entry := range area {
 
@@ -56,25 +58,34 @@ func areaSummary(area []record) {
 				fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
 				total = 0
 				bank = entry.bank
-				fmt.Printf("\nBank $%02x:\n", bank)
+				fmt.Printf("\n%s Bank $%02x:\n", name, bank)
 			}
 
-			next = entry.offset + entry.lenght
-			fmt.Printf("\t\t$%04X - $%04X    %4d", entry.offset, next-1, entry.lenght)
+			next = entry.offset + entry.length
 
-			if entry.overflow {
+			switch entry.status {
+			case 0x01:
+				if flg {
+					fmt.Printf("\t\t$%04X -   >      %4d\n", entry.offset, entry.length)
+					flg = false
+				} else {
+					fmt.Printf("\t\t  >   - $%04X    %4d\n", next-1, entry.length)
+					flg = true
+				}
+			case 0xFF:
+				fmt.Printf("\t\t$%04X - $%04X    %4d   !\n", entry.offset, next-1, entry.length)
 				overflow = true
-				fmt.Println(" - overflow!")
-			} else {
-				fmt.Println("")
+			default:
+				fmt.Printf("\t\t$%04X - $%04X    %4d\n", entry.offset, next-1, entry.length)
 			}
+
 			// gets buggy w/out sorting
 			if prev < entry.offset {
-				total += entry.lenght
+				total += entry.length
 			} else {
 				// exclude overlapped bytes
 				if next > prev {
-					total += (next - prev)
+					total += next - prev
 				}
 			}
 			prev = next
@@ -115,7 +126,7 @@ func sortRecords(area []record) []record {
 	return area
 }
 
-// scan isx records, create rom map and count used banks
+// scan isx records, create areas and count used banks
 func parseISXData(data []byte, size int) int {
 
 	rom := []record{}
@@ -136,30 +147,50 @@ func parseISXData(data []byte, size int) int {
 					used = data[i+loBank]
 				}
 
-				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), lenght: binary.LittleEndian.Uint16(data[i+loLength:]), overflow: false}
-				length := entry.offset + entry.lenght
+				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), length: binary.LittleEndian.Uint16(data[i+loLength:]), status: 0}
+				length := entry.offset + entry.length
+				i = i + loHeader + int(entry.length)
 
 				switch {
 				case entry.offset >= 0x0000 && entry.offset < 0x8000:
+
 					if length >= 0x8000 {
-						entry.overflow = true
+						// overflow
+						entry.status--
+					}
+
+					if entry.bank == 0 {
+						if entry.offset < 0x4000 {
+							if length >= 0x4000 {
+								// spanned
+								entry.status++
+								entry.length = 0x4000 - entry.offset
+								rom = append(rom, entry)
+								entry.bank++
+								entry.offset = 0x4000
+								entry.length = length - 0x4000
+							}
+						} else {
+							entry.bank++
+						}
 					}
 					rom = append(rom, entry)
 				case entry.offset >= 0xA000 && entry.offset < 0xC000:
-					if length >= 0x2000 {
-						entry.overflow = true
+					if length > 0xBFFF {
+						// overflow
+						entry.status--
 					}
 					sram = append(sram, entry)
 				case entry.offset >= 0xC000 && entry.offset < 0xE000:
-					if length >= 0x2000 {
-						entry.overflow = true
+					if length > 0xDFFF {
+						// overflow
+						entry.status--
 					}
 					ram = append(ram, entry)
 				default:
 					bogus = append(bogus, entry)
 				}
 
-				i = i + loHeader + int(entry.lenght)
 			}
 
 		// case 0x03:
@@ -173,10 +204,10 @@ func parseISXData(data []byte, size int) int {
 		}
 	}
 
-	areaSummary(rom)
-	areaSummary(sram)
-	areaSummary(ram)
-	areaSummary(bogus)
+	areaDetails(rom, "ROM")
+	areaDetails(sram, "SRAM")
+	areaDetails(ram, "RAM")
+	areaDetails(bogus, "???")
 
 	return int(used)
 }
@@ -214,7 +245,7 @@ func main() {
 	fmt.Println("Programmed by: tmk, email: tmk@tuta.io")
 	fmt.Printf("Project page: https://github.com/gitendo/isx2gb/\n\n")
 
-	flgSort := flag.Bool("s", false, "sort isx records by rom bank / offset")
+	//	flgSort := flag.Bool("s", false, "sort isx records by rom bank / offset")
 	flag.Parse()
 	//	flag.Usage = usage
 
@@ -224,7 +255,7 @@ func main() {
 		//		os.Exit(1)
 	}
 
-	fmt.Println("flag:", *flgSort)
+	//	fmt.Println("flag:", *flgSort)
 
 	// access FileInfo - get file name and size
 	isx, err := os.Stat("lancelot.isx")
@@ -264,7 +295,7 @@ func main() {
 
 	// fancy
 	hdr = strings.Replace(hdr, "    ", "", 1)
-	fmt.Println(fn, " - ", hdr)
+	fmt.Printf("%s - %s\n\n", fn, hdr)
 
 	banks := parseISXData(data[32:], fs-headerSize)
 	banks++
