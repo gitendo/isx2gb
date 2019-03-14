@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strings"
@@ -127,7 +126,7 @@ func sortRecords(area []record) []record {
 }
 
 // scan isx records, create areas and count used banks
-func parseISXData(data []byte, size int) int {
+func parseISXData(f *os.File, fn string, fs int) {
 
 	rom := []record{}
 	ram := []record{}
@@ -136,7 +135,17 @@ func parseISXData(data []byte, size int) int {
 	used := byte(0)
 	i := 0
 
-	for i < size {
+	// read isx records
+	data := make([]byte, fs)
+	_, err := f.Read(data)
+	f.Close()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to read from", fn)
+		os.Exit(1)
+	}
+
+	// scan
+	for i < fs {
 		switch data[i] {
 		case 0x01:
 			if data[i+loBank] == 0x80 {
@@ -209,7 +218,7 @@ func parseISXData(data []byte, size int) int {
 	areaDetails(ram, "RAM")
 	areaDetails(bogus, "???")
 
-	return int(used)
+	//return int(used)
 }
 
 // fill rom image with code blocks
@@ -273,20 +282,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	// read isx file
-	data, err := ioutil.ReadFile(fn)
-	if err, ok := err.(*os.PathError); ok {
-		fmt.Fprintln(os.Stderr, "Error: Unable to read file", err.Path)
+	// open file
+	f, err := os.Open(fn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access", fn)
+		os.Exit(1)
+	}
+
+	// read header
+	header := make([]byte, 32)
+	_, err = f.Read(header)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to read from", fn)
+		f.Close()
 		os.Exit(1)
 	}
 
 	// 2nd check
-	hdr := string(data[:headerSize])
-	if !strings.HasPrefix(hdr, "ISX ") {
+	if !strings.HasPrefix(string(header), "ISX ") {
 		fmt.Fprintln(os.Stderr, "Error: Header not found, invalid file")
+		f.Close()
 		os.Exit(1)
 	}
 
+	// output file name
 	if strings.HasSuffix(fn, ".isx") {
 		fn = strings.Replace(fn, ".isx", ".gb", 1)
 	} else {
@@ -294,11 +313,10 @@ func main() {
 	}
 
 	// fancy
-	hdr = strings.Replace(hdr, "    ", "", 1)
-	fmt.Printf("%s - %s\n\n", fn, hdr)
+	fmt.Printf("%s : %s\n\n", fn, strings.Replace(string(header), "    ", "", 1))
 
-	banks := parseISXData(data[32:], fs-headerSize)
-	banks++
+	parseISXData(f, fn, fs-headerSize)
+	// banks++
 	/*
 		rom := make([]byte, banks*16384)
 		copyISXBinary(data[32:], rom[:], fs-headerSize)
