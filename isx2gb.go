@@ -4,12 +4,24 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"hash/crc32"
+	"io/ioutil"
 	"os"
 	"sort"
 	"strings"
 )
 
 const ver = 1.00
+
+const bankSize = 0x4000
+
+// ROM header stuff
+const logoStart = 0x0104
+const logoEnd = 0x0133
+const titleStart = 0x0134
+const headerCRC = 0x014D
+const globalCRC = 0x014E
+const logoCRC = 0x153807cd
 
 // roms up to 128Mbit
 const loHeader = 6
@@ -31,6 +43,7 @@ const headerSize = 32
 type record struct {
 	bank   byte
 	offset uint16
+	ptr    int
 	length uint16
 	status byte
 }
@@ -41,7 +54,6 @@ func areaDetails(area []record, name string) {
 	if len(area) > 0 {
 		// sort by bank and offset
 		area = sortRecords(area)
-
 		bank := area[0].bank
 		overflow := bool(false)
 		total := uint16(0)
@@ -144,7 +156,7 @@ func parseISXData(f *os.File, fn string, fs int) {
 		os.Exit(1)
 	}
 
-	// scan
+	// scan and gather required info
 	for i < fs {
 		switch data[i] {
 		case 0x01:
@@ -156,46 +168,56 @@ func parseISXData(f *os.File, fn string, fs int) {
 					used = data[i+loBank]
 				}
 
-				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), length: binary.LittleEndian.Uint16(data[i+loLength:]), status: 0}
+				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), ptr: i + loHeader, length: binary.LittleEndian.Uint16(data[i+loLength:]), status: 0}
 				length := entry.offset + entry.length
+				// for loop control
 				i = i + loHeader + int(entry.length)
 
 				switch {
+				// rom area
 				case entry.offset >= 0x0000 && entry.offset < 0x8000:
 
 					if length >= 0x8000 {
 						// overflow
 						entry.status--
 					}
-
+					// allow data overflow in bank 0
 					if entry.bank == 0 {
-						if entry.offset < 0x4000 {
-							if length >= 0x4000 {
-								// spanned
+						// data migt be in bank 0 or
+						if entry.offset < bankSize {
+							// might be spanned across bank 0 and 1
+							if length >= bankSize {
 								entry.status++
-								entry.length = 0x4000 - entry.offset
+								entry.length = bankSize - entry.offset
 								rom = append(rom, entry)
 								entry.bank++
+								used = 1
 								entry.offset = 0x4000
-								entry.length = length - 0x4000
+								entry.ptr += int(entry.length)
+								entry.length = length - bankSize
 							}
+							// data is located in bank 1
 						} else {
 							entry.bank++
+							used = 1
 						}
 					}
 					rom = append(rom, entry)
+				// sram area
 				case entry.offset >= 0xA000 && entry.offset < 0xC000:
 					if length > 0xBFFF {
 						// overflow
 						entry.status--
 					}
 					sram = append(sram, entry)
+				// ram area
 				case entry.offset >= 0xC000 && entry.offset < 0xE000:
 					if length > 0xDFFF {
 						// overflow
 						entry.status--
 					}
 					ram = append(ram, entry)
+				// invalid records
 				default:
 					bogus = append(bogus, entry)
 				}
@@ -212,8 +234,11 @@ func parseISXData(f *os.File, fn string, fs int) {
 			os.Exit(1)
 		}
 	}
+	// bank 0 is still one used bank ;)
+	used++
 
 	areaDetails(rom, "ROM")
+	makeROM(rom, data, used, fn)
 	areaDetails(sram, "SRAM")
 	areaDetails(ram, "RAM")
 	areaDetails(bogus, "???")
@@ -221,30 +246,47 @@ func parseISXData(f *os.File, fn string, fs int) {
 	//return int(used)
 }
 
-// fill rom image with code blocks
-func copyISXBinary(data []byte, rom []byte, size int) {
+// fill rom image with proper records and save it
+func makeROM(area []record, data []byte, banks byte, fn string) {
 
-	var address, i, length int
-	for i < size {
-		switch data[i] {
-		case 0x01:
-			if data[i+loBank] != 0x80 {
-				address = (int(data[i+loBank]) * 16384) + int(binary.LittleEndian.Uint16(data[i+loOffset:])&0x3FFF)
-				length = i + loHeader + int(binary.LittleEndian.Uint16(data[i+loLength:]))
-				copy(rom[address:], data[i+loHeader:length])
-				i = length
-			} else {
-				panic("ROMs above 16Mbits are not supported yet!")
-			}
+	var offset, length int
 
-		// case 0x03:
-		// case 0x04:
-		// case 0x11:
-		// case 0x13:
-		// case 0x14:
-		default:
-			panic("Unknown record type!")
+	rom := make([]byte, int(banks)*bankSize)
+
+	for _, entry := range area {
+		offset = int(entry.offset)
+		length = int(entry.ptr) + int(entry.length)
+		copy(rom[offset:], data[entry.ptr:length])
+	}
+
+	// fix checksums if there's valid Nintendo logo
+	crc32q := crc32.MakeTable(0xD5828281)
+	crc := crc32.Checksum(rom[logoStart:logoEnd], crc32q)
+	if crc == logoCRC {
+
+		// calculate header checksum
+		crc = 0
+		for i := titleStart; i < headerCRC; i++ {
+			crc = crc - uint32(rom[i]) - 1
 		}
+		rom[headerCRC] = byte(crc)
+
+		// foolproof
+		crc = 0
+		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
+
+		// calculate global checksum
+		for i := 0; i < len(rom); i++ {
+			crc += uint32(rom[i])
+		}
+		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
+	}
+
+	// write ROM file
+	err := ioutil.WriteFile(fn, rom, 0644)
+	if err, ok := err.(*os.PathError); ok {
+		fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
+		os.Exit(1)
 	}
 }
 
