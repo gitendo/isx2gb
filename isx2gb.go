@@ -20,6 +20,7 @@ const bankSize = 0x4000
 const logoStart = 0x0104
 const logoEnd = 0x0133
 const titleStart = 0x0134
+const cgbFlag = 0x0143
 const headerCRC = 0x014D
 const globalCRC = 0x014E
 const logoCRC = 0x153807cd
@@ -48,6 +49,9 @@ type record struct {
 	length uint16
 	status byte
 }
+
+// options
+var optRec *bool
 
 // present rom, sram, ram data layout, size summary and overflow check
 func areaDetails(area []record, name string) {
@@ -238,13 +242,40 @@ func parseISXData(f *os.File, fn string, fs int) {
 	// bank 0 is still one used bank ;)
 	used++
 
-	areaDetails(rom, "ROM")
-	makeROM(rom, data, used, fn)
-	areaDetails(sram, "SRAM")
-	areaDetails(ram, "RAM")
-	areaDetails(bogus, "???")
+	if *optRec {
+		areaDetails(rom, "ROM")
+		areaDetails(sram, "SRAM")
+		areaDetails(ram, "RAM")
+		areaDetails(bogus, "???")
+		areas := [][]record{rom, sram, ram}
+		dumpISXRecords(areas, data, fn)
+	} else {
+		areaDetails(rom, "ROM")
+		makeROM(rom, data, used, fn)
+	}
+}
 
-	//return int(used)
+// extract single record and save it as standalone file
+func dumpISXRecords(areas [][]record, data []byte, fn string) {
+
+	var length int
+	var nn string
+
+	for _, area := range areas {
+		for _, entry := range area {
+			length = int(entry.ptr) + int(entry.length)
+			// not your average colon, it's U+A789
+			nn = fmt.Sprintf("%s_%02X꞉%04X.bin", fn, entry.bank, entry.offset)
+			// write file
+			err := ioutil.WriteFile(nn, data[entry.ptr:length], 0644)
+			if err, ok := err.(*os.PathError); ok {
+				fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
+				os.Exit(1)
+			}
+			fmt.Println(nn)
+		}
+	}
+
 }
 
 // fill rom image with proper records and save it
@@ -283,6 +314,12 @@ func makeROM(area []record, data []byte, banks byte, fn string) {
 		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
 	}
 
+	if rom[cgbFlag] == 0xC0 {
+		fn += ".gbc"
+	} else {
+		fn += ".gb"
+	}
+
 	// write ROM file
 	err := ioutil.WriteFile(fn, rom, 0644)
 	if err, ok := err.(*os.PathError); ok {
@@ -298,7 +335,7 @@ func main() {
 	fmt.Printf("Project page: https://github.com/gitendo/isx2gb/\n\n")
 
 	// define program options
-	optRec := flag.Bool("r", false, "save isx records separately")
+	optRec = flag.Bool("r", false, "save isx records separately")
 
 	flag.Usage = func() {
 		fmt.Printf("Usage:\t%s [options] file[.isx]\n\n", filepath.Base(os.Args[0]))
@@ -314,8 +351,6 @@ func main() {
 	if len(args) != 1 {
 		flag.Usage()
 	}
-
-	fmt.Println("flag:", *optRec)
 
 	// access FileInfo - get file name and size
 	//	isx, err := os.Stat("lancelot.isx")
@@ -357,16 +392,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// output file name
-	if strings.HasSuffix(fn, ".isx") {
-		fn = strings.Replace(fn, ".isx", ".gb", 1)
-	} else {
-		fn += ".gb"
-	}
-
 	// fancy
 	fmt.Printf("%s : %s\n\n", fn, strings.Replace(string(header), "    ", "", 1))
-
+	fn = strings.TrimSuffix(fn, ".isx")
 	parseISXData(f, fn, fs-headerSize)
 	// banks++
 	/*
