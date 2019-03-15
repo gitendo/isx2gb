@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -296,20 +297,29 @@ func main() {
 	fmt.Println("Programmed by: tmk, email: tmk@tuta.io")
 	fmt.Printf("Project page: https://github.com/gitendo/isx2gb/\n\n")
 
-	//	flgSort := flag.Bool("s", false, "sort isx records by rom bank / offset")
-	flag.Parse()
-	//	flag.Usage = usage
+	// define program options
+	optRec := flag.Bool("r", false, "save isx records separately")
 
-	// print usage if no input
-	if len(os.Args) == 1 {
+	flag.Usage = func() {
+		fmt.Printf("Usage:\t%s [options] file[.isx]\n\n", filepath.Base(os.Args[0]))
+		fmt.Println("Options:")
 		flag.PrintDefaults()
-		//		os.Exit(1)
+		os.Exit(1)
 	}
 
-	//	fmt.Println("flag:", *flgSort)
+	flag.Parse()
+
+	args := flag.Args()
+	// print usage if no input
+	if len(args) != 1 {
+		flag.Usage()
+	}
+
+	fmt.Println("flag:", *optRec)
 
 	// access FileInfo - get file name and size
-	isx, err := os.Stat("lancelot.isx")
+	//	isx, err := os.Stat("lancelot.isx")
+	isx, err := os.Stat(args[0])
 	if err, ok := err.(*os.PathError); ok {
 		fmt.Fprintln(os.Stderr, "Error: Unable to access file", err.Path)
 		os.Exit(1)
