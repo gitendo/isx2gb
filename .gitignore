@@ -1,9 +1,7 @@
-*.o
+.vscode/
+_isx2gb.code-workspace
+_make.cmd
 *.gb
 *.isx
 isx2gb
 isx2gb.exe
-isx2gb.ppj
-isx2gb.ppx
-isx2gb.tag
-/output
