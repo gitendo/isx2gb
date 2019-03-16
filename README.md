@@ -1,6 +1,6 @@
 # isx2gb v1.00
 
-Command line utility to convert Intelligent Systems eXecutable files into Game Boy ROM format. This is my personal replacement to abISX v1.02 by Anaerob. It has following features:
+Command line utility to convert Intelligent Systems eXecutable files into Game Boy ROM format. This is my personal replacement for abISX v1.02 by Anaerob. It has following features:
 
 - code / data overflow in bank 0 is allowed, excess bytes are moved to bank 1 without any fuss.
 - ROM checksums are fixed automagically providing that there's a valid logo in header section.
