@@ -51,7 +51,11 @@ type record struct {
 }
 
 // options
+var optFil *bool
+var optPad *bool
 var optRec *bool
+
+//var optSym *bool
 
 // present rom, sram, ram data layout, size summary and overflow check
 func areaDetails(area []record, name string) {
@@ -251,7 +255,7 @@ func parseISXData(f *os.File, fn string, fs int) {
 		dumpISXRecords(areas, data, fn)
 	} else {
 		areaDetails(rom, "ROM")
-		makeROM(rom, data, used, fn)
+		makeROM(rom, data, int(used), fn)
 	}
 }
 
@@ -278,12 +282,29 @@ func dumpISXRecords(areas [][]record, data []byte, fn string) {
 
 }
 
-// fill rom image with proper records and save it
-func makeROM(area []record, data []byte, banks byte, fn string) {
+// create rom image, update header checksums and save it
+func makeROM(area []record, data []byte, banks int, fn string) {
 
 	var offset, length int
 
-	rom := make([]byte, int(banks)*bankSize)
+	// ROM padding
+	if *optPad {
+		banks--
+		banks |= banks >> 1
+		banks |= banks >> 2
+		banks |= banks >> 4
+		banks++
+	}
+
+	rom := make([]byte, banks*bankSize)
+
+	// fill ROM with 0xFF values
+	if *optFil {
+		rom[0] = 0xFF
+		for i := 1; i < len(rom); i *= 2 {
+			copy(rom[i:], rom[:i])
+		}
+	}
 
 	for _, entry := range area {
 		offset = int(entry.offset)
@@ -314,6 +335,7 @@ func makeROM(area []record, data []byte, banks byte, fn string) {
 		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
 	}
 
+	// hardware check
 	if rom[cgbFlag] == 0xC0 {
 		fn += ".gbc"
 	} else {
@@ -335,7 +357,10 @@ func main() {
 	fmt.Printf("Project page: https://github.com/gitendo/isx2gb/\n\n")
 
 	// define program options
+	optFil = flag.Bool("f", false, "switch ROM filling pattern to 0xFF")
+	optPad = flag.Bool("p", false, "round up ROM size to the next highest power of 2")
 	optRec = flag.Bool("r", false, "save isx records separately")
+	//	optSym = flag.Bool("s", false, "create symbol file")
 
 	flag.Usage = func() {
 		fmt.Printf("Usage:\t%s [options] file[.isx]\n\n", filepath.Base(os.Args[0]))
@@ -353,7 +378,6 @@ func main() {
 	}
 
 	// access FileInfo - get file name and size
-	//	isx, err := os.Stat("lancelot.isx")
 	isx, err := os.Stat(args[0])
 	if err, ok := err.(*os.PathError); ok {
 		fmt.Fprintln(os.Stderr, "Error: Unable to access file", err.Path)
@@ -395,17 +419,6 @@ func main() {
 	// fancy
 	fmt.Printf("%s : %s\n\n", fn, strings.Replace(string(header), "    ", "", 1))
 	fn = strings.TrimSuffix(fn, ".isx")
-	parseISXData(f, fn, fs-headerSize)
-	// banks++
-	/*
-		rom := make([]byte, banks*16384)
-		copyISXBinary(data[32:], rom[:], fs-headerSize)
 
-		// write ROM file
-		err = ioutil.WriteFile(fn, rom, 0644)
-		if err, ok := err.(*os.PathError); ok {
-			fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
-			os.Exit(1)
-		}
-	*/
+	parseISXData(f, fn, fs-headerSize)
 }
