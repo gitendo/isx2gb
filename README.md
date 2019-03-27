@@ -14,6 +14,12 @@ Command line utility to convert Intelligent Systems eXecutable files into Game B
 -r  save isx records separately
 ```
 
+### Important :
+Assemble and link your files with `-n` option enabled (no debug information). Otherwise you'll see similar message:
+```
+Error: Unknown record type (1417 : 14)
+```
+
 ### To do :
 - add option to create symbol files
 - clean up code / comments
