@@ -21,9 +21,10 @@ Error: Unknown record type (1417 : 14)
 ```
 
 ### To do :
+- remove critical bugs
 - add option to create symbol files
 - clean up code / comments
 - test it thoroughly
 
 ### Bugs :
-Hopefully none. Let me know if you find any.
+I've already found a few critical ones thanks to couple new .isx files. Will be fixed when i have a time.
