@@ -45,7 +45,6 @@ type symbol struct {
 	bank   byte
 	offset uint16
 	name   string
-	flag   uint16
 }
 
 // used to present data layout
@@ -62,6 +61,7 @@ type record struct {
 var optFil *bool
 var optPad *bool
 var optRec *bool
+var optSym *bool
 
 //var optSym *bool
 
@@ -120,7 +120,7 @@ func areaDetails(area []record, name string) {
 			}
 		}
 
-		fmt.Printf("\t\t\t\t -----\n\t\t\t\t %5d bytes\n", total)
+		fmt.Printf("\t\t\t\t -----\n\t\t\t\t %5d bytes\n\n", total)
 
 		if overflow {
 			fmt.Fprintf(os.Stderr, "\nError: data overflow detected\n")
@@ -154,29 +154,22 @@ func sortRecords(area []record) []record {
 	return area
 }
 
-// sort symbols according to bank and offset
+// sort symbols according to flag, bank and offset
 func sortSymbols(area []symbol) []symbol {
 
 	sort.Slice(area, func(i, j int) bool {
 		switch {
+		// skip flags other than 0x1000
+		// case area[i].flag != area[j].flag:
+		// 	return area[i].flag > area[j].flag
 
-		case area[i].flag != area[j].flag:
-			return area[i].flag < area[j].flag
 		case area[i].bank != area[j].bank:
 			return area[i].bank < area[j].bank
+
 		default:
 			return area[i].offset < area[j].offset
 
 		}
-		/*
-			if area[i].bank < area[j].bank {
-				return true
-			}
-			if area[i].bank > area[j].bank {
-				return false
-			}
-			return area[i].offset < area[j].offset
-		*/
 	})
 	return area
 }
@@ -281,13 +274,21 @@ func parseISXData(f *os.File, fn string, fs int) {
 		// case 0x04:
 		// 	break
 		// case 0x11:
-		// 	break
-		// case 0x13:
-		// 	break
+		// 	range information
+		case 0x13:
+			i++
+			// number of range entries
+			j := int(binary.LittleEndian.Uint16(data[i:]))
+			i += 2
+			i += (j * 9)
+
+		// 	symbol information
 		case 0x14:
 			i++
+			// number of symbols
 			j := binary.LittleEndian.Uint16(data[i:])
 			i += 2
+
 			for j > 0 {
 				length := int(data[i])
 				i++
@@ -299,11 +300,11 @@ func parseISXData(f *os.File, fn string, fs int) {
 				i += 2
 				bank := data[i]
 				i += 2
-				sym = append(sym, symbol{bank: bank, offset: offset, name: name, flag: flag})
+				if flag == 0x1000 {
+					sym = append(sym, symbol{bank: bank, offset: offset, name: name})
+				}
 				j--
 			}
-			sym = sortSymbols(sym)
-			makeSYM(sym, fn)
 
 		default:
 			fmt.Fprintf(os.Stderr, "Error: Unknown record type %X at %X found\n", data[i], i+headerSize)
@@ -312,7 +313,7 @@ func parseISXData(f *os.File, fn string, fs int) {
 	}
 	// bank 0 is still one used bank ;)
 	used++
-
+	// save records
 	if *optRec {
 		areaDetails(rom, "ROM")
 		areaDetails(sram, "SRAM")
@@ -320,9 +321,14 @@ func parseISXData(f *os.File, fn string, fs int) {
 		areaDetails(bogus, "???")
 		areas := [][]record{rom, sram, ram}
 		dumpISXRecords(areas, data, fn)
+		// save rom
 	} else {
 		areaDetails(rom, "ROM")
 		makeROM(rom, data, int(used), fn)
+	}
+	// save .sym
+	if *optSym {
+		makeSYM(sym, fn)
 	}
 }
 
@@ -330,32 +336,49 @@ func parseISXData(f *os.File, fn string, fs int) {
 func dumpISXRecords(areas [][]record, data []byte, fn string) {
 
 	var length int
-	var nn string
+	var rn string
 
 	for _, area := range areas {
 		for _, entry := range area {
 			length = int(entry.ptr) + int(entry.length)
 			// not your average colon, it's U+A789
-			nn = fmt.Sprintf("%s_%02X꞉%04X.bin", fn, entry.bank, entry.offset)
+			rn = fmt.Sprintf("%s_%02X꞉%04X.bin", fn, entry.bank, entry.offset)
 			// write file
-			err := ioutil.WriteFile(nn, data[entry.ptr:length], 0644)
+			err := ioutil.WriteFile(rn, data[entry.ptr:length], 0644)
 			if err, ok := err.(*os.PathError); ok {
 				fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
 				os.Exit(1)
 			}
-			fmt.Println(nn)
+			fmt.Println(rn)
 		}
 	}
 
 }
 
-func makeSYM(area []symbol, fn string) {
-	fmt.Println(fn)
-	for _, entry := range area {
-		if entry.flag != 0x1000 {
-			fmt.Print(";")
+// create symbols file
+func makeSYM(symbols []symbol, fn string) {
+
+	if len(symbols) > 0 {
+		fn += ".sym"
+		f, err := os.Create(fn)
+		if err, ok := err.(*os.PathError); ok {
+			fmt.Fprintln(os.Stderr, "Error: Unable to create file", err.Path)
+			return
 		}
-		fmt.Printf("%02X:%04X %s\n", entry.bank, entry.offset, entry.name)
+
+		symbols = sortSymbols(symbols)
+
+		for _, entry := range symbols {
+			fmt.Fprintf(f, "%02X:%04X %s\n", entry.bank, entry.offset, entry.name)
+			if err, ok := err.(*os.PathError); ok {
+				fmt.Fprintln(os.Stderr, "Error: Unable to write to file", err.Path)
+				f.Close()
+				return
+			}
+		}
+		f.Close()
+	} else {
+		fmt.Println("Warning: File doesn't contain any symbolic information, check your config")
 	}
 }
 
@@ -438,6 +461,7 @@ func main() {
 	optFil = flag.Bool("f", false, "switch ROM filling pattern to 0xFF")
 	optPad = flag.Bool("p", false, "round up ROM size to the next highest power of 2")
 	optRec = flag.Bool("r", false, "save isx records separately")
+	optSym = flag.Bool("s", false, "save symbolic file for debugger")
 	//	optSym = flag.Bool("s", false, "create symbol file")
 
 	flag.Usage = func() {
