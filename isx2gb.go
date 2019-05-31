@@ -40,6 +40,14 @@ const hiLength = 5
 // isx string
 const headerSize = 32
 
+// used to create .sym file
+type symbol struct {
+	bank   byte
+	offset uint16
+	name   string
+	flag   uint16
+}
+
 // used to present data layout
 // status: -1 overflow, 0 normal, 1 spanned from, 2 spanned to
 type record struct {
@@ -146,6 +154,33 @@ func sortRecords(area []record) []record {
 	return area
 }
 
+// sort symbols according to bank and offset
+func sortSymbols(area []symbol) []symbol {
+
+	sort.Slice(area, func(i, j int) bool {
+		switch {
+
+		case area[i].flag != area[j].flag:
+			return area[i].flag < area[j].flag
+		case area[i].bank != area[j].bank:
+			return area[i].bank < area[j].bank
+		default:
+			return area[i].offset < area[j].offset
+
+		}
+		/*
+			if area[i].bank < area[j].bank {
+				return true
+			}
+			if area[i].bank > area[j].bank {
+				return false
+			}
+			return area[i].offset < area[j].offset
+		*/
+	})
+	return area
+}
+
 // scan isx records, create areas and count used banks
 func parseISXData(f *os.File, fn string, fs int) {
 
@@ -153,6 +188,7 @@ func parseISXData(f *os.File, fn string, fs int) {
 	ram := []record{}
 	sram := []record{}
 	bogus := []record{}
+	sym := []symbol{}
 	used := byte(0)
 	i := 0
 
@@ -248,8 +284,27 @@ func parseISXData(f *os.File, fn string, fs int) {
 		// 	break
 		// case 0x13:
 		// 	break
-		// case 0x14:
-		// 	break
+		case 0x14:
+			i++
+			j := binary.LittleEndian.Uint16(data[i:])
+			i += 2
+			for j > 0 {
+				length := int(data[i])
+				i++
+				name := string(data[i : i+length])
+				i += length
+				flag := binary.LittleEndian.Uint16(data[i:])
+				i += 2
+				offset := binary.LittleEndian.Uint16(data[i:])
+				i += 2
+				bank := data[i]
+				i += 2
+				sym = append(sym, symbol{bank: bank, offset: offset, name: name, flag: flag})
+				j--
+			}
+			sym = sortSymbols(sym)
+			makeSYM(sym, fn)
+
 		default:
 			fmt.Fprintf(os.Stderr, "Error: Unknown record type %X at %X found\n", data[i], i+headerSize)
 			os.Exit(1)
@@ -292,6 +347,16 @@ func dumpISXRecords(areas [][]record, data []byte, fn string) {
 		}
 	}
 
+}
+
+func makeSYM(area []symbol, fn string) {
+	fmt.Println(fn)
+	for _, entry := range area {
+		if entry.flag != 0x1000 {
+			fmt.Print(";")
+		}
+		fmt.Printf("%02X:%04X %s\n", entry.bank, entry.offset, entry.name)
+	}
 }
 
 // create rom image, update header checksums and save it
