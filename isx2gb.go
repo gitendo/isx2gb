@@ -41,7 +41,7 @@ const hiLength = 5
 const headerSize = 32
 
 // used to present data layout
-// status: -1 overflow, 0 normal, 1 spanned
+// status: -1 overflow, 0 normal, 1 spanned from, 2 spanned to
 type record struct {
 	bank   byte
 	offset uint16
@@ -61,6 +61,7 @@ var optRec *bool
 func areaDetails(area []record, name string) {
 
 	if len(area) > 0 {
+
 		// sort by bank and offset
 		area = sortRecords(area)
 		bank := area[0].bank
@@ -68,56 +69,55 @@ func areaDetails(area []record, name string) {
 		total := uint16(0)
 		prev := uint16(0)
 		next := uint16(0)
-		flg := bool(true)
 
 		fmt.Printf("%s Bank $%02x:\n", name, bank)
 
 		for _, entry := range area {
 
 			if entry.bank > bank {
-				fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
+				fmt.Printf("\t\t\t\t -----\n\t\t\t\t %5d bytes\n", total)
 				total = 0
+				prev = 0
 				bank = entry.bank
 				fmt.Printf("\n%s Bank $%02x:\n", name, bank)
 			}
 
 			next = entry.offset + entry.length
-
-			switch entry.status {
-			case 0x01:
-				if flg {
-					fmt.Printf("\t\t$%04X -   >      %4d\n", entry.offset, entry.length)
-					flg = false
-				} else {
-					fmt.Printf("\t\t  >   - $%04X    %4d\n", next-1, entry.length)
-					flg = true
-				}
-			case 0xFF:
-				fmt.Printf("\t\t$%04X - $%04X    %4d   !\n", entry.offset, next-1, entry.length)
-				overflow = true
-			default:
-				fmt.Printf("\t\t$%04X - $%04X    %4d\n", entry.offset, next-1, entry.length)
-			}
-
-			// gets buggy w/out sorting
+			// due to sorting prev can't be > entry.offset
 			if prev < entry.offset {
 				total += entry.length
+				// prev == entry.offset
 			} else {
-				// exclude overlapped bytes
+				// exclude overlapping bytes
 				if next > prev {
 					total += next - prev
 				}
 			}
 			prev = next
+
+			if entry.bank > 0 {
+				entry.offset |= 0x4000
+			}
+
+			switch entry.status {
+			case 0x01:
+				fmt.Printf("\t\t$%04X -   >      %4d\n", entry.offset, entry.length)
+			case 0x02:
+				fmt.Printf("\t\t  >   - $%04X    %4d\n", entry.offset+entry.length-1, entry.length)
+			case 0xFF:
+				fmt.Printf("\t\t$%04X - $%04X    %4d   !\n", entry.offset, entry.offset+entry.length-1, entry.length)
+				overflow = true
+			default:
+				fmt.Printf("\t\t$%04X - $%04X    %5d\n", entry.offset, entry.offset+entry.length-1, entry.length)
+			}
 		}
 
-		fmt.Printf("\t\t\t\t-----\n\t\t\t\t%5d bytes\n", total)
+		fmt.Printf("\t\t\t\t -----\n\t\t\t\t %5d bytes\n", total)
 
 		if overflow {
 			fmt.Fprintf(os.Stderr, "\nError: data overflow detected\n")
 			os.Exit(1)
 		}
-
 	}
 }
 
@@ -178,52 +178,59 @@ func parseISXData(f *os.File, fn string, fs int) {
 				}
 
 				entry := record{bank: data[i+loBank], offset: binary.LittleEndian.Uint16(data[i+loOffset:]), ptr: i + loHeader, length: binary.LittleEndian.Uint16(data[i+loLength:]), status: 0}
-				length := entry.offset + entry.length
+				// force relative offsets in banks 1 and above
+				if entry.bank > 0 && entry.offset >= bankSize {
+					entry.offset &= 0x3FFF
+				}
 				// for loop control
 				i = i + loHeader + int(entry.length)
 
 				switch {
 				// rom area
 				case entry.offset >= 0x0000 && entry.offset < 0x8000:
-
-					if length >= 0x8000 {
-						// overflow
-						entry.status--
-					}
-					// allow data overflow in bank 0
+					// allow overflow for bank 0 only
 					if entry.bank == 0 {
-						// data migt be in bank 0 or
+						// data starts in bank 0
 						if entry.offset < bankSize {
-							// might be spanned across bank 0 and 1
-							if length >= bankSize {
-								entry.status++
+							// it might be spanned across bank 0 and 1, split it into 2 records
+							if (entry.offset + entry.length) >= bankSize {
+								// part in bank 0
 								entry.length = bankSize - entry.offset
+								entry.status = 1
 								rom = append(rom, entry)
+								// part in bank 1
 								entry.bank++
-								used = 1
 								entry.offset = 0x4000
 								entry.ptr += int(entry.length)
-								entry.length = length - bankSize
+								entry.length = (entry.offset + entry.length) - bankSize
+								entry.status = 2
+								used = 1
 							}
-							// data is located in bank 1
 						} else {
+							// data is located in bank 1
 							entry.bank++
+							entry.offset &= 0x3FFF
 							used = 1
+						}
+					} else {
+						// for other banks overflow is not allowed
+						if (entry.offset + entry.length) > 0x3FFF {
+							entry.status = 0xFF
 						}
 					}
 					rom = append(rom, entry)
 				// sram area
 				case entry.offset >= 0xA000 && entry.offset < 0xC000:
-					if length > 0xBFFF {
+					if (entry.offset + entry.length) > 0xBFFF {
 						// overflow
-						entry.status--
+						entry.status = 0xFF
 					}
 					sram = append(sram, entry)
 				// ram area
 				case entry.offset >= 0xC000 && entry.offset < 0xE000:
-					if length > 0xDFFF {
+					if (entry.offset + entry.length) > 0xDFFF {
 						// overflow
-						entry.status--
+						entry.status = 0xFF
 					}
 					ram = append(ram, entry)
 				// invalid records
@@ -234,12 +241,17 @@ func parseISXData(f *os.File, fn string, fs int) {
 			}
 
 		// case 0x03:
+		// 	break
 		// case 0x04:
+		// 	break
 		// case 0x11:
+		// 	break
 		// case 0x13:
+		// 	break
 		// case 0x14:
+		// 	break
 		default:
-			fmt.Fprintf(os.Stderr, "Error: Unknown record type (%X : %X)", i, data[i])
+			fmt.Fprintf(os.Stderr, "Error: Unknown record type %X at %X found\n", data[i], i+headerSize)
 			os.Exit(1)
 		}
 	}
@@ -306,8 +318,9 @@ func makeROM(area []record, data []byte, banks int, fn string) {
 		}
 	}
 
+	// fill rom with isx records
 	for _, entry := range area {
-		offset = int(entry.offset)
+		offset = int(entry.bank)*bankSize + int(entry.offset)
 		length = int(entry.ptr) + int(entry.length)
 		copy(rom[offset:], data[entry.ptr:length])
 	}
