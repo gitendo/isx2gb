@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const ver = 1.00
+const ver = 1.02
 
 const bankSize = 0x4000
 
@@ -21,6 +21,7 @@ const logoStart = 0x0104
 const logoEnd = 0x0133
 const titleStart = 0x0134
 const cgbFlag = 0x0143
+const romSize = 0x148
 const headerCRC = 0x014D
 const globalCRC = 0x014E
 const logoCRC = 0x153807cd
@@ -224,14 +225,15 @@ func parseISXData(f *os.File, fn string, fs int) {
 							// it might be spanned across bank 0 and 1, split it into 2 records
 							if (entry.offset + entry.length) >= bankSize {
 								// part in bank 0
+								length := entry.length
 								entry.length = bankSize - entry.offset
 								entry.status = 1
 								rom = append(rom, entry)
 								// part in bank 1
-								entry.bank++
-								entry.offset = 0x4000
+								entry.bank = 1
+								entry.offset = 0
 								entry.ptr += int(entry.length)
-								entry.length = (entry.offset + entry.length) - bankSize
+								entry.length = length - entry.length
 								entry.status = 2
 								used = 1
 							}
@@ -243,7 +245,7 @@ func parseISXData(f *os.File, fn string, fs int) {
 						}
 					} else {
 						// for other banks overflow is not allowed
-						if (entry.offset + entry.length) > 0x3FFF {
+						if (entry.offset + entry.length) > bankSize {
 							entry.status = 0xFF
 						}
 					}
@@ -305,6 +307,10 @@ func parseISXData(f *os.File, fn string, fs int) {
 				}
 				j--
 			}
+		// debug information
+		case 0x20, 0x21, 0x22:
+			i++
+			i += int(binary.LittleEndian.Uint32(data[i:])) + 4
 
 		default:
 			fmt.Fprintf(os.Stderr, "Error: Unknown record type %X at %X found\n", data[i], i+headerSize)
@@ -387,9 +393,11 @@ func makeROM(area []record, data []byte, banks int, fn string) {
 
 	var offset, length int
 
-	// ROM padding
+	// ROM padding - could be fixed (romSize value from header might be > banks)
 	if *optPad {
-		banks--
+		if banks > 1 {
+			banks--
+		}
 		banks |= banks >> 1
 		banks |= banks >> 2
 		banks |= banks >> 4
@@ -461,13 +469,13 @@ func main() {
 	optFil = flag.Bool("f", false, "switch ROM filling pattern to 0xFF")
 	optPad = flag.Bool("p", false, "round up ROM size to the next highest power of 2")
 	optRec = flag.Bool("r", false, "save isx records separately")
-	optSym = flag.Bool("s", false, "save symbolic file for debugger")
-	//	optSym = flag.Bool("s", false, "create symbol file")
+	optSym = flag.Bool("s", false, "create symbolic file for debugger")
 
 	flag.Usage = func() {
 		fmt.Printf("Usage:\t%s [options] file[.isx]\n\n", filepath.Base(os.Args[0]))
 		fmt.Println("Options:")
 		flag.PrintDefaults()
+		fmt.Println()
 		os.Exit(1)
 	}
 
