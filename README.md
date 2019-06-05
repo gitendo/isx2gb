@@ -5,7 +5,7 @@ Command line utility to convert Intelligent Systems eXecutable files into Game B
 - code / data overflow in bank 0 is allowed, excess bytes are moved to bank 1 without any fuss.
 - you're not forced to ORG your code/data if you don't need to, just GROUP it in appropriate banks.
 - you can ORG your code in RAM or SRAM (why not?) and use `-r` option to save it to file for further processing. This might be appreciated by ROM hackers while generating series of patches.
-- to create symbolic file do not use `-n` option for ISLK32 (no debug information).
+- to create symbolic file use CAPSOFF/SMALL with PUBALL directives in your source(s).
 - ROM checksums are fixed automagically providing that there's a valid logo in header section.
 - ROM map is more readable.
 
