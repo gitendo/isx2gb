@@ -487,26 +487,25 @@ func main() {
 		flag.Usage()
 	}
 
-	// access FileInfo - get file name and size
-	isx, err := os.Stat(args[0])
-	if err, ok := err.(*os.PathError); ok {
-		fmt.Fprintln(os.Stderr, "Error: Unable to access file", err.Path)
+	// open file
+	fn := args[0]
+	f, err := os.Open(fn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access", fn)
 		os.Exit(1)
 	}
 
-	fn := isx.Name()
+	// access FileInfo to get file size
+	isx, err := f.Stat()
+	if err, ok := err.(*os.PathError); ok {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access file info for", err.Path)
+		os.Exit(1)
+	}
 	fs := int(isx.Size())
 
 	// 1st check
 	if fs <= headerSize {
 		fmt.Fprintln(os.Stderr, "Error: Dubious file size, probably invalid")
-		os.Exit(1)
-	}
-
-	// open file
-	f, err := os.Open(fn)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: Unable to access", fn)
 		os.Exit(1)
 	}
 
@@ -527,7 +526,7 @@ func main() {
 	}
 
 	// fancy
-	fmt.Printf("%s : %s\n\n", fn, strings.Replace(string(header), "    ", "", 1))
+	fmt.Printf("%s : %s\n\n", isx.Name(), strings.Replace(string(header), "    ", "", 1))
 	fn = strings.TrimSuffix(fn, ".isx")
 
 	parseISXData(f, fn, fs-headerSize)
