@@ -1,7 +1,9 @@
 .vscode/
 _isx2gb.code-workspace
 _make.cmd
-*.gb
+*.bin
+*.gb*
 *.isx
+*.sym
 isx2gb
 isx2gb.exe
