@@ -12,11 +12,17 @@ import (
 	"strings"
 )
 
-const ver = 1.02
+// version
+const ver = 1.03
 
-const bankSize = 0x4000
+// options
+var optDump *bool
+var optFill *bool
+var optPatch *bool
+var optRound *bool
+var optSym *bool
 
-// ROM header stuff
+// rom header stuff
 const logoStart = 0x0104
 const logoEnd = 0x0133
 const titleStart = 0x0134
@@ -25,6 +31,11 @@ const romSize = 0x148
 const headerCRC = 0x014D
 const globalCRC = 0x014E
 const logoCRC = 0x153807cd
+
+const bankSize = 0x4000
+
+// isx string
+const headerSize = 32
 
 // roms up to 128Mbit
 const loHeader = 6
@@ -37,9 +48,6 @@ const hiHeader = 7
 const hiBank = 2
 const hiOffset = 3
 const hiLength = 5
-
-// isx string
-const headerSize = 32
 
 // used to create .sym file
 type symbol struct {
@@ -58,19 +66,10 @@ type record struct {
 	status byte
 }
 
-// options
-var optFil *bool
-var optPad *bool
-var optRec *bool
-var optSym *bool
-
-//var optSym *bool
-
 // present rom, sram, ram data layout, size summary and overflow check
 func areaDetails(area []record, name string) {
 
 	if len(area) > 0 {
-
 		// sort by bank and offset
 		area = sortRecords(area)
 		bank := area[0].bank
@@ -92,7 +91,7 @@ func areaDetails(area []record, name string) {
 			}
 
 			next = entry.offset + entry.length
-			// due to sorting prev can't be > entry.offset
+			// due to sorting, prev can't be > entry.offset
 			if prev < entry.offset {
 				total += entry.length
 				// prev == entry.offset
@@ -105,7 +104,7 @@ func areaDetails(area []record, name string) {
 			prev = next
 
 			if entry.bank > 0 {
-				entry.offset |= 0x4000
+				entry.offset |= bankSize
 			}
 
 			switch entry.status {
@@ -142,15 +141,6 @@ func sortRecords(area []record) []record {
 		default:
 			return area[i].offset < area[j].offset
 		}
-		/*
-			if area[i].bank < area[j].bank {
-				return true
-			}
-			if area[i].bank > area[j].bank {
-				return false
-			}
-			return area[i].offset < area[j].offset
-		*/
 	})
 	return area
 }
@@ -161,22 +151,45 @@ func sortSymbols(area []symbol) []symbol {
 	sort.Slice(area, func(i, j int) bool {
 		switch {
 		// skip flags other than 0x1000
-		// case area[i].flag != area[j].flag:
-		// 	return area[i].flag > area[j].flag
-
 		case area[i].bank != area[j].bank:
 			return area[i].bank < area[j].bank
 
 		default:
 			return area[i].offset < area[j].offset
-
 		}
 	})
 	return area
 }
 
+// fix rom header and global checksums
+func updateCRC(rom []byte) {
+
+	// fix checksums if there's valid Nintendo logo
+	crc32q := crc32.MakeTable(0xD5828281)
+	crc := crc32.Checksum(rom[logoStart:logoEnd], crc32q)
+
+	if crc == logoCRC {
+		// calculate header checksum
+		crc = 0
+		for i := titleStart; i < headerCRC; i++ {
+			crc = crc - uint32(rom[i]) - 1
+		}
+		rom[headerCRC] = byte(crc)
+
+		// foolproof
+		crc = 0
+		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
+
+		// calculate global checksum
+		for i := 0; i < len(rom); i++ {
+			crc += uint32(rom[i])
+		}
+		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
+	}
+}
+
 // scan isx records, create areas and count used banks
-func parseISXData(f *os.File, fn string, fs int) {
+func parseISX(args []string) {
 
 	rom := []record{}
 	ram := []record{}
@@ -186,9 +199,54 @@ func parseISXData(f *os.File, fn string, fs int) {
 	used := byte(0)
 	i := 0
 
+	// open isx file
+	fn := args[0]
+	f, err := os.Open(fn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access", fn)
+		os.Exit(1)
+	}
+
+	// access file info to get file size
+	isx, err := f.Stat()
+	if err, ok := err.(*os.PathError); ok {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access FileInfo for", err.Path)
+		os.Exit(1)
+	}
+	fs := int(isx.Size())
+
+	// 1st check
+	if fs <= headerSize {
+		fmt.Fprintln(os.Stderr, "Error: Dubious file size, probably invalid")
+		os.Exit(1)
+	}
+
+	// read header
+	header := make([]byte, 32)
+	_, err = f.Read(header)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to read from", fn)
+		f.Close()
+		os.Exit(1)
+	}
+
+	// 2nd check
+	if !strings.HasPrefix(string(header), "ISX ") {
+		fmt.Fprintln(os.Stderr, "Error: Header not found, invalid file")
+		f.Close()
+		os.Exit(1)
+	}
+
+	// fancy
+	fmt.Printf("%s : %s\n\n", isx.Name(), strings.Replace(string(header), "    ", "", 1))
+
+	// strip extension, file name will be reused later
+	fn = strings.TrimSuffix(fn, ".isx")
+
 	// read isx records
+	fs -= headerSize
 	data := make([]byte, fs)
-	_, err := f.Read(data)
+	_, err = f.Read(data)
 	f.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error: Unable to read from", fn)
@@ -212,6 +270,7 @@ func parseISXData(f *os.File, fn string, fs int) {
 				if entry.bank > 0 && entry.offset >= bankSize {
 					entry.offset &= 0x3FFF
 				}
+
 				// for loop control
 				i = i + loHeader + int(entry.length)
 
@@ -319,38 +378,45 @@ func parseISXData(f *os.File, fn string, fs int) {
 	}
 	// bank 0 is still one used bank ;)
 	used++
+
 	// save records
-	if *optRec {
+	if *optDump {
 		areaDetails(rom, "ROM")
 		areaDetails(sram, "SRAM")
 		areaDetails(ram, "RAM")
 		areaDetails(bogus, "???")
 		areas := [][]record{rom, sram, ram}
-		dumpISXRecords(areas, data, fn)
+		dumpISX(areas, data, fn)
+		// patch rom
+	} else if *optPatch {
+		patchROM(rom, data, args[1])
 		// save rom
 	} else {
 		areaDetails(rom, "ROM")
 		makeROM(rom, data, int(used), fn)
 	}
-	// save .sym
+
+	// create symbolic file for debugger
 	if *optSym {
 		makeSYM(sym, fn)
 	}
 }
 
-// extract single record and save it as standalone file
-func dumpISXRecords(areas [][]record, data []byte, fn string) {
+// write isx records to files
+func dumpISX(areas [][]record, data []byte, fn string) {
 
 	var length int
 	var rn string
 
+	fmt.Println("Dumping...")
+	// iterate isx records, write each record to file
 	for _, area := range areas {
-		for _, entry := range area {
-			length = int(entry.ptr) + int(entry.length)
+		for _, record := range area {
+			length = int(record.ptr) + int(record.length)
 			// not your average colon, it's U+A789
-			rn = fmt.Sprintf("%s_%02X꞉%04X.bin", fn, entry.bank, entry.offset)
+			rn = fmt.Sprintf("%s_%02X꞉%04X.bin", fn, record.bank, record.offset)
 			// write file
-			err := ioutil.WriteFile(rn, data[entry.ptr:length], 0644)
+			err := ioutil.WriteFile(rn, data[record.ptr:length], 0644)
 			if err, ok := err.(*os.PathError); ok {
 				fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
 				os.Exit(1)
@@ -358,7 +424,130 @@ func dumpISXRecords(areas [][]record, data []byte, fn string) {
 			fmt.Println(rn)
 		}
 	}
+	fmt.Printf("\nDone!\n")
+}
 
+// apply isx records to existing rom file
+func patchROM(area []record, data []byte, fn string) {
+
+	var length int
+	var ptr int64
+	var str string
+
+	// open rom file to be patched
+	f, err := os.Open(fn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access", fn)
+		os.Exit(1)
+	}
+
+	// access file info to get file size
+	isx, err := f.Stat()
+	if err, ok := err.(*os.PathError); ok {
+		fmt.Fprintln(os.Stderr, "Error: Unable to access FileInfo for", err.Path)
+		os.Exit(1)
+	}
+	fs := isx.Size()
+
+	// read rom file
+	rom := make([]byte, fs)
+	_, err = f.Read(rom)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: Unable to read from", fn)
+		os.Exit(1)
+	}
+	f.Close()
+
+	fmt.Println("Patching...")
+
+	// iterate isx records, treat each record as patch
+	for _, record := range area {
+		// calculate record length
+		length = int(record.ptr) + int(record.length)
+		// calculate and set rom file pointer
+		ptr = int64(record.bank)*bankSize + int64(record.offset)
+		// make sure we're within the rom buffer
+		if ptr > fs {
+			fmt.Fprintf(os.Stderr, "Error: Patching over ROM boundary is not possible: 0x%08X\n", ptr)
+			os.Exit(1)
+		}
+		// apply patch
+		copy(rom[ptr:], data[record.ptr:length])
+		// verbose output
+		if record.length == 1 {
+			str = fmt.Sprintf("0x%08X: %5d byte", ptr, record.length)
+		} else {
+			str = fmt.Sprintf("0x%08X: %5d bytes", ptr, record.length)
+		}
+		fmt.Println(str)
+	}
+
+	// don't spread roms with bad crc, it's lame
+	updateCRC(rom)
+
+	// tag filename
+	ext := filepath.Ext(fn)
+	tag := "-patched"
+	fn = strings.Replace(fn, ext, tag+ext, 1)
+
+	// write rom file
+	err = ioutil.WriteFile(fn, rom, 0644)
+	if err, ok := err.(*os.PathError); ok {
+		fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
+		os.Exit(1)
+	}
+	fmt.Printf("\n%s has been created!\n", fn)
+}
+
+// create rom image, update header checksums and save it
+func makeROM(area []record, data []byte, banks int, fn string) {
+
+	var offset, length int
+
+	// rom padding - could be fixed (romSize value from header might be > banks)
+	if *optRound {
+		if banks > 1 {
+			banks--
+		}
+		banks |= banks >> 1
+		banks |= banks >> 2
+		banks |= banks >> 4
+		banks++
+	}
+
+	rom := make([]byte, banks*bankSize)
+
+	// fill rom with 0xFF values
+	if *optFill {
+		rom[0] = 0xFF
+		for i := 1; i < len(rom); i *= 2 {
+			copy(rom[i:], rom[:i])
+		}
+	}
+
+	// fill rom with isx records
+	for _, record := range area {
+		offset = int(record.bank)*bankSize + int(record.offset)
+		length = int(record.ptr) + int(record.length)
+		copy(rom[offset:], data[record.ptr:length])
+	}
+
+	// don't spread roms with bad crc, it's lame
+	updateCRC(rom)
+
+	// hardware check
+	if rom[cgbFlag] == 0xC0 {
+		fn += ".gbc"
+	} else {
+		fn += ".gb"
+	}
+
+	// write rom file
+	err := ioutil.WriteFile(fn, rom, 0644)
+	if err, ok := err.(*os.PathError); ok {
+		fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
+		os.Exit(1)
+	}
 }
 
 // create symbols file
@@ -374,8 +563,8 @@ func makeSYM(symbols []symbol, fn string) {
 
 		symbols = sortSymbols(symbols)
 
-		for _, entry := range symbols {
-			fmt.Fprintf(f, "%02X:%04X %s\n", entry.bank, entry.offset, entry.name)
+		for _, record := range symbols {
+			fmt.Fprintf(f, "%02X:%04X %s\n", record.bank, record.offset, record.name)
 			if err, ok := err.(*os.PathError); ok {
 				fmt.Fprintln(os.Stderr, "Error: Unable to write to file", err.Path)
 				f.Close()
@@ -388,91 +577,21 @@ func makeSYM(symbols []symbol, fn string) {
 	}
 }
 
-// create rom image, update header checksums and save it
-func makeROM(area []record, data []byte, banks int, fn string) {
-
-	var offset, length int
-
-	// ROM padding - could be fixed (romSize value from header might be > banks)
-	if *optPad {
-		if banks > 1 {
-			banks--
-		}
-		banks |= banks >> 1
-		banks |= banks >> 2
-		banks |= banks >> 4
-		banks++
-	}
-
-	rom := make([]byte, banks*bankSize)
-
-	// fill ROM with 0xFF values
-	if *optFil {
-		rom[0] = 0xFF
-		for i := 1; i < len(rom); i *= 2 {
-			copy(rom[i:], rom[:i])
-		}
-	}
-
-	// fill rom with isx records
-	for _, entry := range area {
-		offset = int(entry.bank)*bankSize + int(entry.offset)
-		length = int(entry.ptr) + int(entry.length)
-		copy(rom[offset:], data[entry.ptr:length])
-	}
-
-	// fix checksums if there's valid Nintendo logo
-	crc32q := crc32.MakeTable(0xD5828281)
-	crc := crc32.Checksum(rom[logoStart:logoEnd], crc32q)
-	if crc == logoCRC {
-
-		// calculate header checksum
-		crc = 0
-		for i := titleStart; i < headerCRC; i++ {
-			crc = crc - uint32(rom[i]) - 1
-		}
-		rom[headerCRC] = byte(crc)
-
-		// foolproof
-		crc = 0
-		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
-
-		// calculate global checksum
-		for i := 0; i < len(rom); i++ {
-			crc += uint32(rom[i])
-		}
-		binary.BigEndian.PutUint16(rom[globalCRC:], uint16(crc))
-	}
-
-	// hardware check
-	if rom[cgbFlag] == 0xC0 {
-		fn += ".gbc"
-	} else {
-		fn += ".gb"
-	}
-
-	// write ROM file
-	err := ioutil.WriteFile(fn, rom, 0644)
-	if err, ok := err.(*os.PathError); ok {
-		fmt.Fprintln(os.Stderr, "Error: Unable to write file", err.Path)
-		os.Exit(1)
-	}
-}
-
 func main() {
 
-	fmt.Printf("\nisx2gb v%.2f - Intelligent Systems eXecutable converter for Game Boy (Color)\n", ver)
+	fmt.Printf("\nisx2gb v%.2f - Intelligent Systems eXecutable utility for Game Boy (Color)\n", ver)
 	fmt.Println("Programmed by: tmk, email: tmk@tuta.io")
 	fmt.Printf("Project page: https://github.com/gitendo/isx2gb/\n\n")
 
-	// define program options
-	optFil = flag.Bool("f", false, "switch ROM filling pattern to 0xFF")
-	optPad = flag.Bool("p", false, "round up ROM size to the next highest power of 2")
-	optRec = flag.Bool("r", false, "save isx records separately")
+	// define command line options
+	optDump = flag.Bool("d", false, "dump isx records into binary file(s)")
+	optFill = flag.Bool("f", false, "switch ROM filling pattern from 0x00 to 0xFF")
+	optPatch = flag.Bool("p", false, "patch supplied ROM file with ISX records")
+	optRound = flag.Bool("r", false, "round up ROM size to the next highest power of 2")
 	optSym = flag.Bool("s", false, "create symbolic file for debugger")
 
 	flag.Usage = func() {
-		fmt.Printf("Usage:\t%s [options] file[.isx]\n\n", filepath.Base(os.Args[0]))
+		fmt.Printf("Usage:\t%s [options] file.isx [romfile.gb]\n\n", filepath.Base(os.Args[0]))
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		fmt.Println()
@@ -482,52 +601,15 @@ func main() {
 	flag.Parse()
 
 	args := flag.Args()
-	// print usage if no input
-	if len(args) != 1 {
+
+	// print usage if no input or misinput
+	if len(args) < 1 || len(args) > 2 {
+		flag.Usage()
+	}
+	if *optPatch == true && len(args) < 2 {
 		flag.Usage()
 	}
 
-	// open file
-	fn := args[0]
-	f, err := os.Open(fn)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: Unable to access", fn)
-		os.Exit(1)
-	}
-
-	// access FileInfo to get file size
-	isx, err := f.Stat()
-	if err, ok := err.(*os.PathError); ok {
-		fmt.Fprintln(os.Stderr, "Error: Unable to access file info for", err.Path)
-		os.Exit(1)
-	}
-	fs := int(isx.Size())
-
-	// 1st check
-	if fs <= headerSize {
-		fmt.Fprintln(os.Stderr, "Error: Dubious file size, probably invalid")
-		os.Exit(1)
-	}
-
-	// read header
-	header := make([]byte, 32)
-	_, err = f.Read(header)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: Unable to read from", fn)
-		f.Close()
-		os.Exit(1)
-	}
-
-	// 2nd check
-	if !strings.HasPrefix(string(header), "ISX ") {
-		fmt.Fprintln(os.Stderr, "Error: Header not found, invalid file")
-		f.Close()
-		os.Exit(1)
-	}
-
-	// fancy
-	fmt.Printf("%s : %s\n\n", isx.Name(), strings.Replace(string(header), "    ", "", 1))
-	fn = strings.TrimSuffix(fn, ".isx")
-
-	parseISXData(f, fn, fs-headerSize)
+	// let's do it!
+	parseISX(args)
 }
