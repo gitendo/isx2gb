@@ -1,3 +1,10 @@
+### Notice
+Starting October 12th, 2023 GitHub is enforcing mandatory [two-factor authentication](https://github.blog/2023-03-09-raising-the-bar-for-software-security-github-2fa-begins-march-13/) on my account.  
+I'm not going to comply and move all my activity to GitLab instead.  
+Any future updates / releases will be available at: [https://gitlab.com/gitendo/isx2gb](https://gitlab.com/gitendo/isx2gb)  
+Thanks and see you there!
+___
+
 # isx2gb v1.03
 
 Command line utility to convert Intelligent Systems eXecutable files into Game Boy ROM format and more. This is my personal replacement for abISX v1.02 by Anaerob. It has following improvements:
